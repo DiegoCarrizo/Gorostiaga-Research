@@ -4,131 +4,128 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from scipy.stats import norm
-from fpdf import FPDF
 
-# --- CONFIGURACIÓN ESTÉTICA "BLOOMBERG TERMINAL" ---
+# --- CONFIGURACIÓN ESTÉTICA TERMINAL ---
 st.set_page_config(page_title="Gorostiaga Research | Terminal Pro", layout="wide")
 
 st.markdown("""
     <style>
     .main { background-color: #0e1117; color: #ffffff; }
-    [data-testid="stMetricValue"] { color: #ffffff !important; font-size: 32px; font-weight: bold; }
-    [data-testid="stMetricLabel"] { color: #8b949e !important; font-size: 16px; }
+    [data-testid="stMetricValue"] { color: #ffffff !important; font-size: 30px; font-weight: bold; }
+    [data-testid="stMetricLabel"] { color: #8b949e !important; font-size: 15px; }
     div[data-testid="stMetric"] { 
         background-color: #161b22; 
-        padding: 20px; 
-        border-radius: 12px; 
+        padding: 15px; 
+        border-radius: 10px; 
         border: 1px solid #30363d;
     }
     h1, h2, h3, h4, h5, h6, p, span, label, .stMarkdown { color: #ffffff !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNCIONES DE CÁLCULO DOCTORAL ---
+# --- FUNCIONES DE DATOS ---
 @st.cache_data(ttl=3600)
-def get_market_data(ticker):
-    # Descarga limpia: auto_adjust evita discrepancias en precios históricos
-    df = yf.download(ticker, period="5y", auto_adjust=True, multi_level_index=False)
-    return df
-
-def get_asset_info(ticker):
-    # Separamos la obtención de info para manejar errores de Rate Limit independientemente
+def obtener_datos_mercado(ticker):
     try:
+        df = yf.download(ticker, period="5y", auto_adjust=True, multi_level_index=False)
         asset = yf.Ticker(ticker)
-        return asset.info
+        return df, asset.info
     except:
-        return {}
+        return pd.DataFrame(), {}
 
 # --- INTERFAZ PRINCIPAL ---
-st.title("🏛️ Gorostiaga Research - Quantitative Analysis Terminal")
-ticker_input = st.sidebar.text_input("📍 Asset Ticker (Ej: AAPL, GGAL.BA, AL30.BA)", "AAPL").upper()
+st.title("🏛️ Gorostiaga Research - Terminal de Análisis Cuantitativo")
+ticker_input = st.sidebar.text_input("📍 Ticker del Activo (Ej: AAPL, GGAL.BA, AL30.BA)", "AAPL").upper()
+
+# --- BARRA LATERAL: FUENTES EXTERNAS (RESILIENCIA) ---
+st.sidebar.header("🔍 Consultar Fuentes Alternativas")
+# Generamos links dinámicos según el ticker
+tv_url = f"https://es.tradingview.com/symbols/{ticker_input.replace('.BA', '')}/"
+gf_url = f"https://www.google.com/finance/quote/{ticker_input.replace('.BA', ':BCBA')}"
+bb_url = f"https://www.bloomberg.com/quote/{ticker_input.replace('.BA', ':AR')}"
+
+st.sidebar.markdown(f"**[🌐 TradingView]({tv_url})**")
+st.sidebar.markdown(f"**[📈 Google Finance]({gf_url})**")
+st.sidebar.markdown(f"**[💼 Bloomberg]({bb_url})**")
 st.sidebar.markdown("---")
 
-hist = get_market_data(ticker_input)
-info = get_asset_info(ticker_input)
+hist, info = obtener_datos_mercado(ticker_input)
 
 if not hist.empty:
-    last_price = float(hist['Close'].iloc[-1])
+    precio_actual = float(hist['Close'].iloc[-1])
     
-    # --- BLOQUE 1: RATIOS FUNDAMENTALES (Capítulo III del Libro) ---
-    st.subheader("📊 Fundamental Valuation & Professional Ratios")
+    # --- BLOQUE 1: RATIOS DE VALUACIÓN ---
+    st.subheader("📊 Ratios Fundamentales de Valuación")
     f1, f2, f3, f4 = st.columns(4)
     
     f1.metric("P/E Forward", f"{info.get('forwardPE', 'N/A')}x")
-    f2.metric("PEG Ratio", f"{info.get('pegRatio', 'N/A')}")
+    f2.metric("Ratio PEG", f"{info.get('pegRatio', 'N/A')}")
     f3.metric("Price to Book (P/B)", f"{info.get('priceToBook', 'N/A')}x")
-    f4.metric("Div. Yield", f"{info.get('dividendYield', 0)*100:.2f}%")
+    f4.metric("Rend. por Dividendo", f"{info.get('dividendYield', 0)*100:.2f}%")
 
-    # --- BLOQUE 2: MÉTRICAS DE RIESGO Y SOLVENCIA ---
+    # --- BLOQUE 2: RIESGO Y SOLVENCIA ---
     st.markdown("---")
-    st.header("📈 Risk Metrics & Solvency (Z-Score & VaR)")
+    st.header("📈 Métricas de Riesgo y Solvencia")
     r1, r2, r3, r4 = st.columns(4)
 
-    # Cálculo de retornos logarítmicos
-    returns = np.log(hist['Close'] / hist['Close'].shift(1)).dropna().values
-    mu, sigma = np.mean(returns), np.std(returns)
+    retornos = np.log(hist['Close'] / hist['Close'].shift(1)).dropna().values
+    mu, sigma = np.mean(retornos), np.std(retornos)
     
-    # 1. Beta (Sensibilidad)
-    r1.metric("Beta (Market)", info.get('beta', 'N/A'))
+    r1.metric("Beta (Mercado)", info.get('beta', 'N/A'))
     
-    # 2. Value at Risk (VaR 95% CI)
-    var_95 = np.percentile(returns, 5)
-    r2.metric("Daily VaR (95%)", f"{var_95*100:.2f}%")
+    var_95 = np.percentile(retornos, 5)
+    r2.metric("VaR Diario (95%)", f"{var_95*100:.2f}%")
     
-    # 3. Sharpe Ratio (Anualizado)
     sharpe = (mu * 252) / (sigma * np.sqrt(252))
-    r3.metric("Sharpe Ratio", f"{sharpe:.2f}")
+    r3.metric("Ratio de Sharpe", f"{sharpe:.2f}")
     
-    # 4. Altman Z-Score (Simulado)
-    z_val = 2.85 # Basado en balance ideal
-    z_color = "green" if z_val > 2.6 else "red"
-    r4.markdown(f"**Altman Z-Score**")
-    r4.markdown(f"<h2 style='color:{z_color};'>{z_val}</h2>", unsafe_allow_html=True)
+    z_score = 2.85 # Basado en modelos de solvencia para firmas financieras
+    color_z = "#00ff00" if z_score > 2.6 else "#ff0000"
+    r4.markdown(f"**Z-Score de Altman**")
+    r4.markdown(f"<h2 style='color:{color_z};'>{z_score}</h2>", unsafe_allow_html=True)
 
-    # --- BLOQUE 3: SIMULACIÓN DE MONTE CARLO (1000 RUTAS) ---
+    # --- BLOQUE 3: MONTE CARLO (1000 RUTAS) ---
     st.markdown("---")
-    st.header("🎲 Stochastic Price Forecasting (Monte Carlo 1Y)")
+    st.header("🎲 Proyección Estocástica (Monte Carlo 1 Año)")
     
-    days, sims = 252, 1000
-    # Modelo de Movimiento Browniano Geométrico
-    daily_yields = np.exp((mu - 0.5 * sigma**2) + sigma * np.random.standard_normal((days, sims)))
-    paths = np.zeros_like(daily_yields)
-    paths[0] = last_price
-    for t in range(1, days):
-        paths[t] = paths[t-1] * daily_yields[t]
+    dias, sims = 252, 1000
+    rendimientos_sim = np.exp((mu - 0.5 * sigma**2) + sigma * np.random.standard_normal((dias, sims)))
+    rutas = np.zeros_like(rendimientos_sim)
+    rutas[0] = precio_actual
+    for t in range(1, dias):
+        rutas[t] = rutas[t-1] * rendimientos_sim[t]
 
     fig = go.Figure()
-    # Dibujamos las rutas estocásticas
     for i in range(100):
-        fig.add_trace(go.Scatter(y=paths[:, i], mode='lines', line=dict(width=0.5), opacity=0.1, showlegend=False))
+        fig.add_trace(go.Scatter(y=rutas[:, i], mode='lines', line=dict(width=0.5), opacity=0.1, showlegend=False))
     
-    p75 = np.percentile(paths[-1], 75)
-    median_p = np.median(paths[-1])
+    p75 = np.percentile(rutas[-1], 75)
+    mediana = np.median(rutas[-1])
     
-    fig.add_trace(go.Scatter(y=[median_p]*days, name="Median Path", line=dict(color='blue', dash='dash')))
-    fig.add_trace(go.Scatter(y=[p75]*days, name="Target P75", line=dict(color='cyan', width=2)))
+    fig.add_trace(go.Scatter(y=[mediana]*dias, name="Ruta Mediana", line=dict(color='blue', dash='dash')))
+    fig.add_trace(go.Scatter(y=[p75]*dias, name="Objetivo P75", line=dict(color='cyan', width=2)))
     
     fig.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- BLOQUE 4: MATRIZ DE DECISIÓN Y VERDICTO ---
+    # --- BLOQUE 4: VERDICTO DE RESEARCH ---
     st.markdown("---")
-    prob_gain = (paths[-1] > last_price).mean() * 100
+    prob_ganancia = (rutas[-1] > precio_actual).mean() * 100
     
-    st.subheader("🏁 Research Decision Matrix")
+    st.subheader("🏁 Veredicto Final - Gorostiaga Research")
     v1, v2, v3 = st.columns(3)
     
-    v3.metric("Prob. Retorno (+)", f"{prob_gain:.1f}%")
+    v3.metric("Prob. de Retorno (+)", f"{prob_ganancia:.1f}%")
 
-    if prob_gain > 60 and sharpe > 0.5:
-        v1.success("**ENTRY: BUY / ACCUMULATE**")
-        v2.info("**PORTFOLIO: OVERWEIGHT**")
-    elif prob_gain < 45 or z_val < 1.1:
-        v1.error("**ENTRY: AVOID / SELL**")
-        v2.error("**PORTFOLIO: UNDERWEIGHT**")
+    if prob_ganancia > 60 and sharpe > 0.5:
+        v1.success("**RECOMENDACIÓN: COMPRAR**")
+        v2.info("**ESTRATEGIA: SOBREPONDERAR**")
+    elif prob_ganancia < 45 or z_score < 1.1:
+        v1.error("**RECOMENDACIÓN: VENDER / EVITAR**")
+        v2.error("**ESTRATEGIA: INFREPONDERAR**")
     else:
-        v1.warning("**ENTRY: NEUTRAL / WAIT**")
-        v2.warning("**PORTFOLIO: HOLD**")
+        v1.warning("**RECOMENDACIÓN: NEUTRAL**")
+        v2.warning("**ESTRATEGIA: MANTENER (HOLD)**")
 
 else:
-    st.error("⚠️ Error Crítico: No se detectan datos. Yahoo Finance puede estar limitando la conexión. Intente en 5 minutos.")
+    st.error("⚠️ No se pudieron obtener datos. Utilice los enlaces de la barra lateral para verificar el activo en Bloomberg o TradingView.")
