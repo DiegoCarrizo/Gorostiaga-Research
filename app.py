@@ -5,9 +5,10 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.figure_factory as ff
 from scipy.stats import skew, kurtosis
+import time
 
-# --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Gorostiaga Research | High-Quant Terminal", layout="wide")
+# --- CONFIGURACIÓN DE INTERFAZ ---
+st.set_page_config(page_title="Gorostiaga Research | Terminal Quant Global", layout="wide")
 
 st.markdown("""
     <style>
@@ -17,90 +18,117 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- MOTOR CUANTITATIVO AVANZADO ---
+# --- MOTOR CUANTITATIVO ---
 @st.cache_data(ttl=3600)
-def analizar_avanzado(tickers):
-    resultados = []
+def analizar_universo_completo(tickers):
+    """Procesa todos los activos y guarda sus métricas estocásticas individuales."""
+    todo_el_analisis = {}
+    
     for t in tickers:
         try:
-            asset = yf.Ticker(t)
+            # Descarga limpia para evitar errores de formato
             hist = yf.download(t, period="2y", progress=False, multi_level_index=False)
             if hist.empty: continue
             
+            asset = yf.Ticker(t)
             info = asset.info
             close = hist['Close']
             returns = np.log(close / close.shift(1)).dropna()
             
-            # Métricas de Distribución (Momentos)
-            s_val = skew(returns)
-            k_val = kurtosis(returns) # Excess Kurtosis
-            var_95 = np.percentile(returns, 5)
+            # Estadísticos de la Distribución
+            s_val = float(skew(returns))
+            k_val = float(kurtosis(returns))
+            var_95 = float(np.percentile(returns, 5))
             
-            # Monte Carlo (1000 rutas, 252 días)
+            # Simulación Monte Carlo (1000 rutas)
             mu, sigma = returns.mean(), returns.std()
             last_p = float(close.iloc[-1])
             sims, days = 1000, 252
             yields = np.exp((mu - 0.5 * sigma**2) + sigma * np.random.standard_normal((days, sims)))
             paths = np.zeros_like(yields); paths[0] = last_p
-            for i in range(1, days): paths[i] = paths[i-1] * yields[i]
+            for i in range(1, days):
+                paths[i] = paths[i-1] * yields[i]
             
-            resultados.append({
+            # Guardamos el set completo de datos por cada Ticker
+            todo_el_analisis[t] = {
                 "Ticker": t,
                 "Precio": last_p,
                 "Sesgo": s_val,
                 "Curtosis": k_val,
                 "VaR 95%": var_95 * 100,
-                "P75 Target": np.percentile(paths[-1], 75),
-                "PEG": info.get('pegRatio', 0) or 0,
-                "P/B": info.get('priceToBook', 0) or 0,
+                "P75 Target": float(np.percentile(paths[-1], 75)),
                 "Sector": info.get('sector', 'N/A'),
-                "Retornos": returns, # Para histograma
-                "Paths": paths # Para gráfico Monte Carlo
-            })
-        except: continue
-    return resultados
+                "Retornos": returns.tolist(), # Convertimos a lista para estabilidad en el cache
+                "Paths": paths # Array para gráficos
+            }
+            time.sleep(0.1) # Evitar rate limiting
+        except Exception as e:
+            continue
+            
+    return todo_el_analisis
 
-# --- INTERFAZ ---
-st.title("🏛️ Gorostiaga Research - High-Quant Terminal")
+# --- INTERFAZ PRINCIPAL ---
+st.title("🏛️ Gorostiaga Research - Terminal de Análisis de Riesgo")
+
 tickers_input = st.sidebar.text_area("Lista de Tickers", "AAPL, MSFT, NVDA, GGAL, YPF, AL30.BA")
 tickers = [x.strip().upper() for x in tickers_input.split(",") if x.strip()]
 
 if st.button("🚀 Ejecutar Análisis Multidimensional"):
-    data_list = analizar_avanzado(tickers)
+    with st.spinner("Analizando distribución y simulando rutas estocásticas..."):
+        resultados_dict = analizar_universo_completo(tickers)
     
-    if data_list:
-        df = pd.DataFrame(data_list).drop(['Retornos', 'Paths'], axis=1)
-        st.header("🏆 Monitor de Valuación y Riesgo")
-        st.dataframe(df.style.format({"Precio": "{:.2f}", "Sesgo": "{:.2f}", "Curtosis": "{:.2f}", "VaR 95%": "{:.2f}%", "P75 Target": "{:.2f}"}), use_container_width=True)
+    if resultados_dict:
+        # 1. Tabla Resumen de todo el universo
+        st.header("🏆 Monitor de Métricas Cuantitativas")
+        df_resumen = pd.DataFrame([
+            {k: v for k, v in data.items() if k not in ['Retornos', 'Paths']} 
+            for data in resultados_dict.values()
+        ])
+        
+        st.dataframe(df_resumen.style.format({
+            "Precio": "{:.2f}", 
+            "Sesgo": "{:.2f}", 
+            "Curtosis": "{:.2f}", 
+            "VaR 95%": "{:.2f}%", 
+            "P75 Target": "{:.2f}"
+        }), use_container_width=True)
 
-        # Seleccionar ticker para análisis profundo
-        target = st.selectbox("Seleccione un activo para análisis de distribución y Monte Carlo", [d['Ticker'] for d in data_list])
-        selected_data = next(item for item in data_list if item["Ticker"] == target)
+        st.markdown("---")
+
+        # 2. Selector de Activo para Análisis Profundo
+        # Ahora el selector permite navegar por TODA la lista analizada
+        target = st.selectbox("🎯 Seleccione un activo para desglosar Riesgo y Monte Carlo", list(resultados_dict.keys()))
+        
+        # Recuperamos la data específica del ticker seleccionado
+        data_target = resultados_dict[target]
 
         col1, col2 = st.columns(2)
 
         with col1:
             st.subheader(f"📊 Distribución de Retornos: {target}")
-            # Histograma + VaR Line
-            res = selected_data['Retornos']
-            fig_dist = ff.create_distplot([res], [target], bin_size=.005, show_curve=True, colors=['#00ffcc'])
-            fig_dist.add_vline(x=selected_data['VaR 95%']/100, line_dash="dash", line_color="red", annotation_text="VaR 95%")
+            res_arr = np.array(data_target['Retornos'])
+            fig_dist = ff.create_distplot([res_arr], [target], bin_size=.005, show_curve=True, colors=['#00ffcc'])
+            # Línea de VaR Crítico
+            fig_dist.add_vline(x=data_target['VaR 95%']/100, line_dash="dash", line_color="red", 
+                               annotation_text=f"VaR (95%): {data_target['VaR 95%']:.2f}%")
             fig_dist.update_layout(template="plotly_dark", showlegend=False)
             st.plotly_chart(fig_dist, use_container_width=True)
             
-            st.info(f"**Sesgo:** {selected_data['Sesgo']:.2f} | **Curtosis:** {selected_data['Curtosis']:.2f}")
-            st.caption("Un Sesgo negativo indica mayor probabilidad de caídas abruptas. Una Curtosis alta (>3) indica 'colas pesadas' (riesgo de eventos extremos).")
+            st.info(f"**Sesgo:** {data_target['Sesgo']:.2f} | **Curtosis:** {data_target['Curtosis']:.2f}")
 
         with col2:
-            st.subheader(f"🎲 Simulación Monte Carlo: {target}")
-            paths = selected_data['Paths']
+            st.subheader(f"🎲 Simulación Monte Carlo (1 año): {target}")
+            paths = data_target['Paths']
             fig_mc = go.Figure()
-            for i in range(50): # Dibujar 50 rutas para claridad
-                fig_mc.add_trace(go.Scatter(y=paths[:, i], mode='lines', line=dict(width=0.5), opacity=0.3, showlegend=False))
+            # Graficamos una muestra de 50 rutas para optimizar el renderizado
+            for i in range(50):
+                fig_mc.add_trace(go.Scatter(y=paths[:, i], mode='lines', line=dict(width=0.6), opacity=0.3, showlegend=False))
             
-            fig_mc.add_trace(go.Scatter(y=[selected_data['P75 Target']]*252, name="P75 Target", line=dict(color='#00ffcc', dash='dash')))
-            fig_mc.update_layout(template="plotly_dark", yaxis_title="Precio Proyectado", xaxis_title="Ruedas (Días)")
+            # Marcador de Precio Objetivo P75
+            fig_mc.add_trace(go.Scatter(y=[data_target['P75 Target']]*252, name="P75 Target", 
+                                       line=dict(color='#00ffcc', dash='dash', width=2)))
+            fig_mc.update_layout(template="plotly_dark", yaxis_title="Precio (USD)", xaxis_title="Ruedas de Trading")
             st.plotly_chart(fig_mc, use_container_width=True)
 
     else:
-        st.error("No se pudieron procesar los datos.")
+        st.error("⚠️ No se pudieron obtener datos. Verifique la conexión con Yahoo Finance o los tickers ingresados.")
