@@ -5,7 +5,28 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.stats import norm
 from fpdf import FPDF
-import base64
+import requests_cache # Agregá esto a tu requirements.txt
+
+# --- SESIÓN PROFESIONAL PARA EVITAR BLOQUEOS ---
+# Creamos una sesión que guarda datos por 10 minutos (600 segundos)
+session = requests_cache.CachedSession('yfinance.cache')
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+})
+
+@st.cache_data(ttl=600) # El caché de Streamlit también ayuda a no saturar
+def get_full_data(ticker):
+    try:
+        # Usamos la sesión con el User-Agent configurado
+        asset = yf.Ticker(ticker, session=session)
+        df = asset.history(period="5y", auto_adjust=True)
+        # Limpieza de MultiIndex si existe
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        return df, asset.info
+    except Exception as e:
+        st.error(f"Error de conexión con Yahoo Finance: {e}")
+        return pd.DataFrame(), {}
 
 # --- CONFIGURACIÓN ESTÉTICA "ULTRA DARK" ---
 st.set_page_config(page_title="Gorostiaga Research | Terminal Pro", layout="wide")
