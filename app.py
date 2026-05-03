@@ -3,11 +3,12 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import plotly.figure_factory as ff
+from scipy.stats import skew, kurtosis
 
-# --- CONFIGURACIÓN ESTÉTICA ---
-st.set_page_config(page_title="Gorostiaga Research | Terminal Pro", layout="wide")
+# --- CONFIGURACIÓN ---
+st.set_page_config(page_title="Gorostiaga Research | High-Quant Terminal", layout="wide")
 
-# Estilo CSS para asegurar visibilidad
 st.markdown("""
     <style>
     .main { background-color: #0e1117 !important; color: #ffffff !important; }
@@ -16,119 +17,90 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- LÓGICA DE APOYO ---
-def calcular_moat(info):
-    try:
-        om = info.get('operatingMargins', 0) or 0
-        roe = info.get('returnOnEquity', 0) or 0
-        if om > 0.20 and roe > 0.15: return "Fuerte"
-        if om > 0.10: return "Moderado"
-        return "Débil"
-    except: return "N/A"
-
-def calcular_riesgo_rating(info, var_val):
-    try:
-        debt_equity = (info.get('debtToEquity', 100) or 100) / 100
-        riesgo = 5 + (debt_equity * 2) + (abs(var_val) * 10)
-        return int(min(10, max(1, round(riesgo))))
-    except: return 5
-
-# --- MOTOR DE ANÁLISIS BLINDADO ---
+# --- MOTOR CUANTITATIVO AVANZADO ---
 @st.cache_data(ttl=3600)
-def analizar_seleccion(tickers):
+def analizar_avanzado(tickers):
     resultados = []
     for t in tickers:
         try:
             asset = yf.Ticker(t)
-            # Forzamos descarga limpia para evitar Multi-Index
             hist = yf.download(t, period="2y", progress=False, multi_level_index=False)
             if hist.empty: continue
             
             info = asset.info
             close = hist['Close']
+            returns = np.log(close / close.shift(1)).dropna()
             
-            # Análisis Cuantitativo
-            returns = np.log(close / close.shift(1)).dropna().values
-            mu, sigma = np.mean(returns), np.std(returns)
-            last_price = float(close.iloc[-1])
-            
-            # Montecarlo P75 (Simplificado para estabilidad)
-            p75 = last_price * np.exp((mu - 0.5 * sigma**2) * 252 + sigma * np.sqrt(252) * 0.674)
+            # Métricas de Distribución (Momentos)
+            s_val = skew(returns)
+            k_val = kurtosis(returns) # Excess Kurtosis
             var_95 = np.percentile(returns, 5)
             
-            # Ratios de Valuación
-            pe_fwd = info.get('forwardPE', 0) or 0
+            # Monte Carlo (1000 rutas, 252 días)
+            mu, sigma = returns.mean(), returns.std()
+            last_p = float(close.iloc[-1])
+            sims, days = 1000, 252
+            yields = np.exp((mu - 0.5 * sigma**2) + sigma * np.random.standard_normal((days, sims)))
+            paths = np.zeros_like(yields); paths[0] = last_p
+            for i in range(1, days): paths[i] = paths[i-1] * yields[i]
             
             resultados.append({
                 "Ticker": t,
-                "Precio": round(last_price, 2),
-                "P/E Fwd": float(pe_fwd),
-                "PEG Ratio": float(info.get('pegRatio', 0) or 0),
-                "P/B Ratio": float(info.get('priceToBook', 0) or 0),
-                "Moat": calcular_moat(info),
+                "Precio": last_p,
+                "Sesgo": s_val,
+                "Curtosis": k_val,
+                "VaR 95%": var_95 * 100,
+                "P75 Target": np.percentile(paths[-1], 75),
+                "PEG": info.get('pegRatio', 0) or 0,
+                "P/B": info.get('priceToBook', 0) or 0,
                 "Sector": info.get('sector', 'N/A'),
-                "Deuda/Cap": f"{info.get('debtToEquity', 0) or 0}%",
-                "Target P75": float(p75),
-                "VaR (%)": float(var_95 * 100),
-                "Rating Riesgo": calcular_riesgo_rating(info, var_95),
-                "Entrada": round(last_price * 0.95, 2)
+                "Retornos": returns, # Para histograma
+                "Paths": paths # Para gráfico Monte Carlo
             })
-        except Exception as e:
-            st.sidebar.warning(f"Error analizando {t}: {e}")
-            continue
-    return pd.DataFrame(resultados)
+        except: continue
+    return resultados
 
 # --- INTERFAZ ---
-st.title("🏛️ Gorostiaga Research - Terminal Quant")
-st.markdown("Análisis de Valuación y Riesgo Estocástico")
+st.title("🏛️ Gorostiaga Research - High-Quant Terminal")
+tickers_input = st.sidebar.text_area("Lista de Tickers", "AAPL, MSFT, NVDA, GGAL, YPF, AL30.BA")
+tickers = [x.strip().upper() for x in tickers_input.split(",") if x.strip()]
 
-universo_input = st.sidebar.text_area("Lista de Tickers", "AAPL, MSFT, GOOGL, META, NVDA, GGAL, YPF, BMA, PAM")
-tickers_list = [x.strip().upper() for x in universo_input.split(",") if x.strip()]
+if st.button("🚀 Ejecutar Análisis Multidimensional"):
+    data_list = analizar_avanzado(tickers)
+    
+    if data_list:
+        df = pd.DataFrame(data_list).drop(['Retornos', 'Paths'], axis=1)
+        st.header("🏆 Monitor de Valuación y Riesgo")
+        st.dataframe(df.style.format({"Precio": "{:.2f}", "Sesgo": "{:.2f}", "Curtosis": "{:.2f}", "VaR 95%": "{:.2f}%", "P75 Target": "{:.2f}"}), use_container_width=True)
 
-if st.button("🚀 Ejecutar Análisis"):
-    with st.spinner("Sincronizando con mercados globales..."):
-        df = analizar_seleccion(tickers_list)
-        
-        if not df.empty:
-            # Cálculo de P/E Relativo
-            try:
-                mean_pe = df['P/E Fwd'].replace(0, np.nan).mean()
-                df['P/E vs Sector'] = df['P/E Fwd'] / mean_pe
-            except:
-                df['P/E vs Sector'] = 1.0
+        # Seleccionar ticker para análisis profundo
+        target = st.selectbox("Seleccione un activo para análisis de distribución y Monte Carlo", [d['Ticker'] for d in data_list])
+        selected_data = next(item for item in data_list if item["Ticker"] == target)
 
-            # Ordenamiento y TOP 10
-            df_final = df.sort_values(by=["Rating Riesgo", "Alfa vs SPY" if "Alfa vs SPY" in df else "P/E Fwd"], 
-                                      ascending=[True, True]).head(10)
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader(f"📊 Distribución de Retornos: {target}")
+            # Histograma + VaR Line
+            res = selected_data['Retornos']
+            fig_dist = ff.create_distplot([res], [target], bin_size=.005, show_curve=True, colors=['#00ffcc'])
+            fig_dist.add_vline(x=selected_data['VaR 95%']/100, line_dash="dash", line_color="red", annotation_text="VaR 95%")
+            fig_dist.update_layout(template="plotly_dark", showlegend=False)
+            st.plotly_chart(fig_dist, use_container_width=True)
             
-            st.header("🏆 Selección TOP 10 de Research")
-            
-            # Mostrar tabla
-            st.dataframe(df_final.style.format({
-                "Precio": "${:.2f}",
-                "P/E Fwd": "{:.2f}",
-                "PEG Ratio": "{:.2f}",
-                "P/B Ratio": "{:.2f}",
-                "P/E vs Sector": "{:.2f}x",
-                "Target P75": "${:.2f}",
-                "VaR (%)": "{:.2f}%",
-                "Entrada": "${:.2f}"
-            }), use_container_width=True)
+            st.info(f"**Sesgo:** {selected_data['Sesgo']:.2f} | **Curtosis:** {selected_data['Curtosis']:.2f}")
+            st.caption("Un Sesgo negativo indica mayor probabilidad de caídas abruptas. Una Curtosis alta (>3) indica 'colas pesadas' (riesgo de eventos extremos).")
 
-            # Gráficos
-            col1, col2 = st.columns(2)
-            with col1:
-                fig_risk = go.Figure(go.Scatter(x=df_final["VaR (%)"], y=df_final["Target P75"], 
-                                               mode='markers+text', text=df_final["Ticker"],
-                                               marker=dict(size=12, color=df_final["Rating Riesgo"], colorscale='Viridis')))
-                fig_risk.update_layout(title="Riesgo (VaR) vs Retorno (P75)", template="plotly_dark")
-                st.plotly_chart(fig_risk, use_container_width=True)
+        with col2:
+            st.subheader(f"🎲 Simulación Monte Carlo: {target}")
+            paths = selected_data['Paths']
+            fig_mc = go.Figure()
+            for i in range(50): # Dibujar 50 rutas para claridad
+                fig_mc.add_trace(go.Scatter(y=paths[:, i], mode='lines', line=dict(width=0.5), opacity=0.3, showlegend=False))
             
-            with col2:
-                fig_val = go.Figure(go.Scatter(x=df_final["PEG Ratio"], y=df_final["P/B Ratio"], 
-                                              mode='markers+text', text=df_final["Ticker"],
-                                              marker=dict(size=12, color=df_final["P/E vs Sector"], colorscale='Cividis')))
-                fig_val.update_layout(title="Valuación: PEG vs P/B", template="plotly_dark")
-                st.plotly_chart(fig_val, use_container_width=True)
-        else:
-            st.error("No se pudieron obtener datos. Verifique su conexión o los tickers ingresados.")
+            fig_mc.add_trace(go.Scatter(y=[selected_data['P75 Target']]*252, name="P75 Target", line=dict(color='#00ffcc', dash='dash')))
+            fig_mc.update_layout(template="plotly_dark", yaxis_title="Precio Proyectado", xaxis_title="Ruedas (Días)")
+            st.plotly_chart(fig_mc, use_container_width=True)
+
+    else:
+        st.error("No se pudieron procesar los datos.")
