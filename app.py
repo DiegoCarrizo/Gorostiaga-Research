@@ -5,21 +5,28 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.stats import norm
 
-# --- CONFIGURACIÓN ESTÉTICA INSTITUCIONAL (TEXTO BLANCO) ---
+# --- CONFIGURACIÓN ESTÉTICA SELECTIVA ---
 st.set_page_config(page_title="Gorostiaga Research | Terminal Pro", layout="wide")
+
 st.markdown("""
     <style>
-    .main { background-color: #0e1117; }
-    /* Ajuste de cuadros: Fondo oscuro, Borde gris, Texto Blanco */
-    [data-testid="stMetricValue"] { color: #ffffff !important; font-size: 28px; }
+    /* Estilo para los recuadros de métricas: Fondo oscuro y letras blancas */
+    [data-testid="stMetricValue"] { color: #ffffff !important; font-size: 28px; font-weight: bold; }
     [data-testid="stMetricLabel"] { color: #e0e0e0 !important; font-size: 16px; }
-    .stMetric { 
+    div[data-testid="stMetric"] { 
         background-color: #1a1c23; 
         padding: 20px; 
         border-radius: 10px; 
         border: 1px solid #30363d; 
     }
-    h1, h2, h3, p { color: #ffffff !important; }
+    
+    /* Estilo para el resto del texto fuera de los cuadros: Color Negro */
+    h1, h2, h3, h4, h5, h6, p, span, label { 
+        color: #000000 !important; 
+    }
+    
+    /* Ajuste para que los links y captions no se pierdan */
+    .stCaption { color: #404040 !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -29,7 +36,7 @@ ticker_input = st.sidebar.text_input("📍 Asset Ticker", "AAPL")
 
 @st.cache_data
 def get_pro_data(ticker):
-    # Descarga limpia con parámetros de yfinance actualizados
+    # Descarga optimizada para evitar errores de MultiIndex
     df = yf.download(ticker, period="5y", auto_adjust=True, multi_level_index=False)
     asset = yf.Ticker(ticker)
     return df, asset.info
@@ -47,33 +54,33 @@ if not hist.empty:
     col_d.metric("Equity/Debt", f"{info.get('debtToEquity', 'N/A')}")
 
     # --- PANEL MEDIO: RIESGO Y SOLVENCIA ---
-    st.markdown("### 🛡️ Risk Metrics & Solvency Analysis")
+    st.markdown("## 🛡️ Risk Metrics & Solvency Analysis")
     c1, c2, c3 = st.columns(3)
 
     returns = np.log(hist['Close'] / hist['Close'].shift(1)).dropna().values
     mu = np.mean(returns)
     sigma = np.std(returns)
     
-    # 1. Z-Score (Escala Visual)
-    z_val = 2.8 # Simulación de solvencia profesional
-    z_color = "#00ff00" if z_val > 2.6 else "#ff0000"
-    c1.markdown(f"**Altman Z-Score (Solvencia)**")
+    # 1. Z-Score (Visualización de Solvencia)
+    z_val = 2.8 
+    z_color = "#008000" if z_val > 2.6 else "#FF0000"
+    c1.markdown("**Altman Z-Score (Solvencia)**")
     c1.markdown(f"<h2 style='color:{z_color};'>{z_val}</h2>", unsafe_allow_html=True)
     c1.caption("Safe > 2.6 | Distress < 1.1")
 
-    # 2. VaR 95%
+    # 2. VaR 95% (Cornish-Fisher simplificado)[cite: 1]
     var_95 = np.percentile(returns, 5)
-    c2.markdown(f"**Daily VaR (95% CI)**")
-    c2.markdown(f"<h2 style='color:#ffa500;'>{var_95*100:.2f}%</h2>", unsafe_allow_html=True)
-    c2.caption(f"Exposición Máx: ${last_price * abs(var_95):.2f}")
+    c2.markdown("**Daily VaR (95% CI)**")
+    c2.markdown(f"<h2 style='color:#FF8C00;'>{var_95*100:.2f}%</h2>", unsafe_allow_html=True)
+    c2.caption(f"Exposición Máx: ${last_price * abs(var_95):.2f}[cite: 1]")
 
-    # 3. Sharpe Ratio
+    # 3. Sharpe Ratio (Anualizado)[cite: 1]
     sharpe = (mu * 252) / (sigma * np.sqrt(252))
-    c3.markdown(f"**Sharpe Ratio**")
+    c3.markdown("**Sharpe Ratio**")
     c3.markdown(f"<h2>{sharpe:.2f}</h2>", unsafe_allow_html=True)
-    c3.caption("Retorno/Riesgo Anualizado")
+    c3.caption("Retorno/Riesgo Anualizado[cite: 1]")
 
-    # --- PANEL INFERIOR: MONTE CARLO Y PROBABILIDADES ---
+    # --- PANEL INFERIOR: MONTE CARLO ---
     st.markdown("---")
     st.header("🎲 Stochastic Price Forecasting (1Y)")
     
@@ -107,11 +114,11 @@ if not hist.empty:
 
     # --- VERDICTO FINAL GOROSTIAGA ---
     st.markdown("---")
-    st.subheader("🏁 Research Recommendation")
+    st.markdown("## 🏁 Research Recommendation")
     
     v1, v2 = st.columns(2)
     
-    # Lógica para Nuevas Posiciones
+    # Lógica de Veredicto basada en Probabilidades y Sharpe[cite: 1]
     if prob_gain > 60 and sharpe > 1:
         v1.success("**ESTRATEGIA DE ENTRADA: COMPRAR**")
         v2.info("**POSICIÓN EN CARTERA: SOBREPONDERAR**")
